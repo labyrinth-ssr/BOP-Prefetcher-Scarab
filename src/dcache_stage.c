@@ -30,6 +30,7 @@
 
 #include "dcache_stage.h"
 
+#include "dcache_3c.h"
 #include "globals/assert.h"
 #include "globals/global_defs.h"
 #include "globals/global_types.h"
@@ -75,8 +76,10 @@ static inline Flag dcache_stage_check_mem_type(Op* op);
 static inline void dcache_stage_remove_src_op(Stage_Data* src_sd, int ii);
 
 static inline void dcache_cacheline_hit(Op* op, Addr line_addr, Dcache_Data* line);
-static inline void dcache_cacheline_miss(Op* op, Addr line_addr);
+static inline void dcache_cacheline_miss(Op* op, Addr line_addr, Dcache_3C_Type miss_3c_type);
 
+static inline Dcache_3C_Type dcache_3c_process_access(Op* op, Addr line_addr, Flag real_dcache_miss);
+static inline void dcache_3c_collect_miss_stats(Op* op, Dcache_3C_Type miss_3c_type);
 static inline void dcache_fill_wp_collect_stats(Dcache_Data* line, Mem_Req* req);
 static inline void dcache_hit_wp_collect_stats(Dcache_Data* line, Op* op);
 static inline Flag dcache_miss_new_mem_req(Op* op, Addr line_addr, Mem_Req_Type mem_req_type);
@@ -106,6 +109,7 @@ void init_dcache_stage(uns8 proc_id, const char* name) {
 
   /* initialize the cache structure */
   init_cache(&dc->dcache, "DCACHE", DCACHE_SIZE, DCACHE_ASSOC, DCACHE_LINE_SIZE, sizeof(Dcache_Data), DCACHE_REPL);
+  dcache_3c_init(proc_id, DCACHE_SIZE, DCACHE_LINE_SIZE);
   reset_dcache_stage();
 
   dc->ports = (Ports*)malloc(sizeof(Ports) * DCACHE_BANKS);
@@ -285,10 +289,11 @@ void update_dcache_stage(Stage_Data* src_sd) {
     }
 
     if (line) {
+      dcache_3c_process_access(op, line_addr, FALSE);
       dcache_cacheline_hit(op, line_addr, line);
       continue;
     }
-    dcache_cacheline_miss(op, line_addr);
+    dcache_cacheline_miss(op, line_addr, DCACHE_3C_NONE);
   }
 
   /* prefetcher update */
@@ -379,6 +384,44 @@ static inline void dcache_stage_remove_src_op(Stage_Data* src_sd, int ii) {
   src_sd->ops[ii] = NULL;
   src_sd->op_count--;
   ASSERT(dc->proc_id, src_sd->op_count >= 0);
+}
+
+static inline Dcache_3C_Type dcache_3c_process_access(Op* op, Addr line_addr, Flag real_dcache_miss) {
+  if (op->inst_info->table_info.mem_type != MEM_LD && op->inst_info->table_info.mem_type != MEM_ST)
+    return DCACHE_3C_NONE;
+
+  return dcache_3c_access(op->proc_id, line_addr, real_dcache_miss);
+}
+
+static inline void dcache_3c_collect_miss_stats(Op* op, Dcache_3C_Type miss_3c_type) {
+  switch (miss_3c_type) {
+    case DCACHE_3C_COMPULSORY:
+      STAT_EVENT(op->proc_id, DCACHE_3C_COMPULSORY_MISS);
+      if (!op->off_path)
+        STAT_EVENT(op->proc_id, DCACHE_3C_COMPULSORY_MISS_ONPATH);
+      else
+        STAT_EVENT(op->proc_id, DCACHE_3C_COMPULSORY_MISS_OFFPATH);
+      break;
+    case DCACHE_3C_CAPACITY:
+      STAT_EVENT(op->proc_id, DCACHE_3C_CAPACITY_MISS);
+      if (!op->off_path)
+        STAT_EVENT(op->proc_id, DCACHE_3C_CAPACITY_MISS_ONPATH);
+      else
+        STAT_EVENT(op->proc_id, DCACHE_3C_CAPACITY_MISS_OFFPATH);
+      break;
+    case DCACHE_3C_CONFLICT:
+      STAT_EVENT(op->proc_id, DCACHE_3C_CONFLICT_MISS);
+      if (!op->off_path)
+        STAT_EVENT(op->proc_id, DCACHE_3C_CONFLICT_MISS_ONPATH);
+      else
+        STAT_EVENT(op->proc_id, DCACHE_3C_CONFLICT_MISS_OFFPATH);
+      break;
+    case DCACHE_3C_NONE:
+      break;
+    default:
+      ASSERT(op->proc_id, FALSE);
+      break;
+  }
 }
 
 static inline Flag dcache_stage_addr_unready(Op* op) {
@@ -583,7 +626,7 @@ static inline void dcache_cacheline_hit(Op* op, Addr line_addr, Dcache_Data* lin
   }
 }
 
-static inline void dcache_cacheline_miss(Op* op, Addr line_addr) {
+static inline void dcache_cacheline_miss(Op* op, Addr line_addr, Dcache_3C_Type miss_3c_type) {
   if (op->inst_info->table_info.mem_type == MEM_ST)
     STAT_EVENT(op->proc_id, POWER_DCACHE_WRITE_MISS);
   else
@@ -627,15 +670,18 @@ static inline void dcache_cacheline_miss(Op* op, Addr line_addr) {
         dcache_miss_extra_access(op, &dc->dcache, line_addr, dc->proc_id, DCACHE_CYCLES);
       }
 
+      miss_3c_type = dcache_3c_process_access(op, line_addr, TRUE);
       if (!op->off_path) {
         STAT_EVENT(op->proc_id, DCACHE_MISS);
         STAT_EVENT(op->proc_id, DCACHE_MISS_ONPATH);
         STAT_EVENT(op->proc_id, DCACHE_MISS_LD_ONPATH);
+        dcache_3c_collect_miss_stats(op, miss_3c_type);
         op->oracle_info.dcmiss = TRUE;
         STAT_EVENT(op->proc_id, DCACHE_MISS_LD);
       } else {
         STAT_EVENT(op->proc_id, DCACHE_MISS_OFFPATH);
         STAT_EVENT(op->proc_id, DCACHE_MISS_LD_OFFPATH);
+        dcache_3c_collect_miss_stats(op, miss_3c_type);
         wrongpath_dcmiss = FALSE;
       }
       op->state = OS_MISS;
@@ -656,6 +702,7 @@ static inline void dcache_cacheline_miss(Op* op, Addr line_addr) {
         dcache_miss_extra_access(op, &dc->dcache, line_addr, dc->proc_id, DCACHE_CYCLES);
       }
 
+      miss_3c_type = dcache_3c_process_access(op, line_addr, TRUE);
       if (!op->off_path) {
         STAT_EVENT(op->proc_id, DCACHE_MISS);
         STAT_EVENT(op->proc_id, DCACHE_MISS_ONPATH);
@@ -691,11 +738,13 @@ static inline void dcache_cacheline_miss(Op* op, Addr line_addr) {
         STAT_EVENT(op->proc_id, DCACHE_MISS);
         STAT_EVENT(op->proc_id, DCACHE_MISS_ONPATH);
         STAT_EVENT(op->proc_id, DCACHE_MISS_ST_ONPATH);
+        dcache_3c_collect_miss_stats(op, miss_3c_type);
         op->oracle_info.dcmiss = TRUE;
         STAT_EVENT(op->proc_id, DCACHE_MISS_ST);
       } else {
         STAT_EVENT(op->proc_id, DCACHE_MISS_OFFPATH);
         STAT_EVENT(op->proc_id, DCACHE_MISS_ST_OFFPATH);
+        dcache_3c_collect_miss_stats(op, miss_3c_type);
         wrongpath_dcmiss = FALSE;
       }
       op->state = OS_MISS;
