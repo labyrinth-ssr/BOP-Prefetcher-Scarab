@@ -734,6 +734,7 @@ static inline void dcache_cacheline_miss(Op* op, Addr line_addr, Dcache_3C_Type 
         dcache_miss_extra_access(op, &dc->dcache, line_addr, dc->proc_id, DCACHE_CYCLES);
       }
 
+      miss_3c_type = dcache_3c_process_access(op, line_addr, TRUE);
       if (!op->off_path) {
         STAT_EVENT(op->proc_id, DCACHE_MISS);
         STAT_EVENT(op->proc_id, DCACHE_MISS_ONPATH);
