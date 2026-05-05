@@ -48,6 +48,7 @@
 
 #include "bp/bp.h"
 #include "prefetcher/l2l1pref.h"
+#include "prefetcher/pref_bop.h"
 #include "prefetcher/pref_common.h"
 #include "prefetcher/stream_pref.h"
 
@@ -860,6 +861,7 @@ static inline void dcache_fill_process_cacheline(Mem_Req* req, Dcache_Data* data
   if (req->type == MRT_DPRF) {  // cmp FIXME
     data->HW_prefetch = TRUE;
     data->HW_prefetched = TRUE;
+    pref_bop_note_prefetch_fill(req->proc_id, req->addr, req->prefetcher_id, UL1);
   } else {
     data->HW_prefetch = FALSE;
     data->HW_prefetched = FALSE;

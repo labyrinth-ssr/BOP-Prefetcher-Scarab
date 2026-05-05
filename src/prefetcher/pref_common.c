@@ -54,7 +54,6 @@
 #include "prefetcher//pref_stridepc.h"
 #include "prefetcher/l2l1pref.h"
 #include "prefetcher/pref_2dc.h"
-#include "prefetcher/pref_bop.h"
 #include "prefetcher/pref_ghb.h"
 #include "prefetcher/pref_markov.h"
 #include "prefetcher/pref_phase.h"
@@ -827,7 +826,6 @@ void pref_ul1sent(uns8 proc_id, Addr addr, uns8 prefetcher_id) {
 
   // prefetch missed in the ul1 and went out on the bus
   pref_table[prefetcher_id].hwp_info->curr_sent_core[proc_id]++;
-  pref_bop_note_prefetch_sent(proc_id, addr, prefetcher_id);
 
   STAT_EVENT_ALL(PREF_L1_TOTAL_SENT);
   STAT_EVENT(proc_id, CORE_PREF_L1_SENT);

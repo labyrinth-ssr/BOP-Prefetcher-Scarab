@@ -45,6 +45,6 @@ void pref_bop_ul1_prefhit(uns8 proc_id, Addr lineAddr, Addr loadPC, uns32 global
 void pref_bop_umlc_miss(uns8 proc_id, Addr lineAddr, Addr loadPC, uns32 global_hist);
 void pref_bop_umlc_prefhit(uns8 proc_id, Addr lineAddr, Addr loadPC, uns32 global_hist);
 
-void pref_bop_note_prefetch_sent(uns8 proc_id, Addr lineAddr, uns8 prefetcher_id);
+void pref_bop_note_prefetch_fill(uns8 proc_id, Addr lineAddr, uns8 prefetcher_id, CacheLevel type);
 
 #endif

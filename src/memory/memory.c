@@ -52,6 +52,7 @@
 #include "prefetcher//pref_stream.h"
 #include "prefetcher/fdip.h"
 #include "prefetcher/l2l1pref.h"
+#include "prefetcher/pref_bop.h"
 #include "prefetcher/pref_common.h"
 #include "prefetcher/stream_pref.h"
 
@@ -3967,6 +3968,7 @@ Flag l1_fill_line(Mem_Req* req) {
     data->prefetcher_id = req->prefetcher_id;
     data->pref_loadPC = req->pref_loadPC;
     data->global_hist = req->global_hist;
+    pref_bop_note_prefetch_fill(req->proc_id, req->addr, req->prefetcher_id, UL1);
 
     if (TRACK_L1_MISS_DEPS || MARK_L1_MISSES)
       mark_ops_as_l1_miss_satisfied(req);
@@ -4218,6 +4220,8 @@ Flag l1_fill_line(Mem_Req* req) {
   data->l1miss_latency = (req->type == MRT_WB) ? 0 : cycle_count - req->l1_miss_cycle;
   data->fetch_cycle = cycle_count;
   data->onpath_use_cycle = req->off_path ? 0 : cycle_count;
+  if (req->type == MRT_DPRF)
+    pref_bop_note_prefetch_fill(req->proc_id, req->addr, req->prefetcher_id, UL1);
 
   req->l1_miss_satisfied = TRUE;
 
@@ -4440,6 +4444,8 @@ Flag mlc_fill_line(Mem_Req* req) {
   data->mlc_miss_latency = (req->type == MRT_WB) ? 0 : cycle_count - req->mlc_miss_cycle;
   data->fetch_cycle = cycle_count;
   data->onpath_use_cycle = req->off_path ? 0 : cycle_count;
+  if (req->type == MRT_DPRF)
+    pref_bop_note_prefetch_fill(req->proc_id, req->addr, req->prefetcher_id, UMLC);
 
   req->mlc_miss_satisfied = TRUE;
 

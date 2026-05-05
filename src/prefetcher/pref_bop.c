@@ -123,7 +123,7 @@ static void pref_bop_access(Pref_BOP* bop_hwp, uns8 proc_id, Addr lineAddr, Addr
   if (bop_hwp->type == UMLC) {
     added = pref_addto_umlc_req_queue(proc_id, pref_index, bop_hwp->hwp_info->id);
     if (added)
-      pref_bop_rr_insert(bop_hwp, line_index);
+      pref_bop_inflight_insert(bop_hwp, pref_index, line_index);
   } else {
     added = pref_addto_ul1req_queue_set(proc_id, pref_index, bop_hwp->hwp_info->id, bop_hwp->current_offset, loadPC,
                                         global_hist, FALSE);
@@ -135,11 +135,18 @@ static void pref_bop_access(Pref_BOP* bop_hwp, uns8 proc_id, Addr lineAddr, Addr
         bop_hwp->prefetch_enabled, added);
 }
 
-void pref_bop_note_prefetch_sent(uns8 proc_id, Addr lineAddr, uns8 prefetcher_id) {
-  if (!PREF_BOP_ON || prefetcher_id != bop_hwp_id || !bop_prefetchers.bop_hwp_core_ul1)
+void pref_bop_note_prefetch_fill(uns8 proc_id, Addr lineAddr, uns8 prefetcher_id, CacheLevel type) {
+  if (!PREF_BOP_ON || prefetcher_id != bop_hwp_id)
     return;
 
-  Pref_BOP* bop_hwp = &bop_prefetchers.bop_hwp_core_ul1[proc_id];
+  Pref_BOP* bop_hwp = NULL;
+  if (type == UL1 && bop_prefetchers.bop_hwp_core_ul1)
+    bop_hwp = &bop_prefetchers.bop_hwp_core_ul1[proc_id];
+  else if (type == UMLC && bop_prefetchers.bop_hwp_core_umlc)
+    bop_hwp = &bop_prefetchers.bop_hwp_core_umlc[proc_id];
+  if (!bop_hwp)
+    return;
+
   Addr pref_line = lineAddr >> LOG2(DCACHE_LINE_SIZE);
   Addr base_line = 0;
 
