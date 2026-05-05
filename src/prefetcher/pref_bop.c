@@ -16,6 +16,8 @@
 #include "prefetcher/pref.param.h"
 #include "prefetcher/pref_bop.param.h"
 
+#include "statistics.h"
+
 #define DEBUG(proc_id, args...) _DEBUG(proc_id, DEBUG_PREF_BOP, ##args)
 
 BOP_Prefetchers bop_prefetchers;
@@ -116,20 +118,30 @@ static void pref_bop_access(Pref_BOP* bop_hwp, uns8 proc_id, Addr lineAddr, Addr
     return;
 
   Addr pref_index = line_index + bop_hwp->current_offset;
-  if (!pref_bop_same_page(line_index, pref_index))
+  if (!pref_bop_same_page(line_index, pref_index)) {
+    STAT_EVENT(proc_id, BOP_PREF_DROPPED_PAGE);
+    DEBUG(proc_id, "DROPPED page cross line:%llx pref:%llx off:%d\n", line_index, pref_index, bop_hwp->current_offset);
     return;
+  }
 
   Flag added = FALSE;
   if (bop_hwp->type == UMLC) {
     added = pref_addto_umlc_req_queue(proc_id, pref_index, bop_hwp->hwp_info->id);
-    if (added)
+    if (added) {
       pref_bop_inflight_insert(bop_hwp, pref_index, line_index);
+      STAT_EVENT(proc_id, BOP_INFLIGHT_INSERT);
+    }
   } else {
     added = pref_addto_ul1req_queue_set(proc_id, pref_index, bop_hwp->hwp_info->id, bop_hwp->current_offset, loadPC,
                                         global_hist, FALSE);
-    if (added)
+    if (added) {
       pref_bop_inflight_insert(bop_hwp, pref_index, line_index);
+      STAT_EVENT(proc_id, BOP_INFLIGHT_INSERT);
+    }
   }
+
+  if (added)
+    STAT_EVENT(proc_id, BOP_PREF_ISSUED);
 
   DEBUG(proc_id, "line:%llx pref:%llx off:%d enabled:%d added:%d\n", line_index, pref_index, bop_hwp->current_offset,
         bop_hwp->prefetch_enabled, added);
@@ -150,16 +162,28 @@ void pref_bop_note_prefetch_fill(uns8 proc_id, Addr lineAddr, uns8 prefetcher_id
   Addr pref_line = lineAddr >> LOG2(DCACHE_LINE_SIZE);
   Addr base_line = 0;
 
-  if (pref_bop_inflight_remove(bop_hwp, pref_line, &base_line))
+  if (pref_bop_inflight_remove(bop_hwp, pref_line, &base_line)) {
     pref_bop_rr_insert(bop_hwp, base_line);
+    STAT_EVENT(proc_id, BOP_RR_FILL_UPDATES);
+    DEBUG(proc_id, "RR insert on fill: pref_line:%llx base_line:%llx\n", pref_line, base_line);
+  } else {
+    STAT_EVENT(proc_id, BOP_INFLIGHT_MISS);
+    DEBUG(proc_id, "INFLIGHT miss on fill: pref_line:%llx\n", pref_line);
+  }
 }
 
 static void pref_bop_test_offset(Pref_BOP* bop_hwp, Addr line_index) {
   int offset = bop_hwp->offsets[bop_hwp->offset_index];
+  STAT_EVENT(0, BOP_TEST_OFFSET_EVENTS);
   if (offset > 0 && line_index >= (Addr)offset && pref_bop_same_page(line_index - offset, line_index) &&
       pref_bop_rr_lookup(bop_hwp, line_index - offset)) {
     if (bop_hwp->scores[bop_hwp->offset_index] < PREF_BOP_SCORE_MAX)
       bop_hwp->scores[bop_hwp->offset_index]++;
+
+    STAT_EVENT(0, BOP_RR_HIT_SCORE_INC);
+    DEBUG(0, "RR hit: line:%llx offset:%d score:%u best_score:%u best_off:%d\n",
+          line_index, offset, bop_hwp->scores[bop_hwp->offset_index],
+          bop_hwp->best_score, bop_hwp->best_offset);
 
     if (bop_hwp->scores[bop_hwp->offset_index] > bop_hwp->best_score) {
       bop_hwp->best_score = bop_hwp->scores[bop_hwp->offset_index];
@@ -177,8 +201,20 @@ static void pref_bop_test_offset(Pref_BOP* bop_hwp, Addr line_index) {
 }
 
 static void pref_bop_finish_learning_phase(Pref_BOP* bop_hwp) {
+  DEBUG(0, "PHASE end: best_off:%d best_score:%u bad_score:%u rounds:%u\n",
+        bop_hwp->best_offset, bop_hwp->best_score, PREF_BOP_BAD_SCORE, bop_hwp->rounds);
+
   bop_hwp->current_offset = (bop_hwp->best_score > PREF_BOP_BAD_SCORE) ? bop_hwp->best_offset : 0;
   bop_hwp->prefetch_enabled = bop_hwp->current_offset != 0;
+
+  STAT_EVENT(0, BOP_PHASE_COMPLETE);
+  if (bop_hwp->prefetch_enabled) {
+    STAT_EVENT(0, BOP_PHASE_PREF_ON);
+    DEBUG(0, "PHASE result: ON offset:%d\n", bop_hwp->current_offset);
+  } else {
+    STAT_EVENT(0, BOP_PHASE_PREF_OFF);
+    DEBUG(0, "PHASE result: OFF (score too low)\n");
+  }
 
   memset(bop_hwp->scores, 0, sizeof(uns) * bop_hwp->num_offsets);
   bop_hwp->rounds = 0;
