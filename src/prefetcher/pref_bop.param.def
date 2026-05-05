@@ -1,0 +1,20 @@
+/* -*- Mode: c -*- */
+
+DEF_PARAM(pref_bop_on                    , PREF_BOP_ON                    , Flag   , Flag , FALSE , )
+DEF_PARAM(debug_pref_bop                 , DEBUG_PREF_BOP                 , Flag   , Flag , FALSE , )
+
+DEF_PARAM(pref_bop_rr_entries            , PREF_BOP_RR_ENTRIES            , uns    , uns  , 256   , )
+DEF_PARAM(pref_bop_rr_tag_bits           , PREF_BOP_RR_TAG_BITS           , uns    , uns  , 0     , )
+DEF_PARAM(pref_bop_inflight_entries      , PREF_BOP_INFLIGHT_ENTRIES      , uns    , uns  , 1024  , )
+
+DEF_PARAM(pref_bop_score_max             , PREF_BOP_SCORE_MAX             , uns    , uns  , 31    , )
+DEF_PARAM(pref_bop_round_max             , PREF_BOP_ROUND_MAX             , uns    , uns  , 100   , )
+DEF_PARAM(pref_bop_bad_score             , PREF_BOP_BAD_SCORE             , uns    , uns  , 1     , )
+
+DEF_PARAM(pref_bop_max_offset            , PREF_BOP_MAX_OFFSET            , uns    , uns  , 256   , )
+DEF_PARAM(pref_bop_small_prime_offsets   , PREF_BOP_SMALL_PRIME_OFFSETS   , Flag   , Flag , TRUE  , )
+DEF_PARAM(pref_bop_start_offset          , PREF_BOP_START_OFFSET          , int    , int  , 1     , )
+
+DEF_PARAM(pref_bop_page_bytes            , PREF_BOP_PAGE_BYTES            , uns64  , uns64, 4096  , )
+DEF_PARAM(pref_bop_prefetch_on_miss      , PREF_BOP_PREFETCH_ON_MISS      , Flag   , Flag , TRUE  , )
+DEF_PARAM(pref_bop_prefetch_on_prefhit   , PREF_BOP_PREFETCH_ON_PREFHIT   , Flag   , Flag , TRUE  , )
