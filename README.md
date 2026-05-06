@@ -10,6 +10,14 @@ Run:
 1. Copy: `src/PARAMS.sunny_cove` into your run directory and rename to `PARAMS.in`
 2. Run: `src/scarab --frontend memtrace --cbp_trace_r0=<MEMTRACE_FILE>`
 
+# BOP Prefetcher
+
+## implementation
+see docs/bop-impl.md
+
+### correctness test
+see src/prefetcher/bop-verification.md
+
 # Scarab
 
 Scarab is a cycle accurate simulator for state-of-the-art, high performance,
