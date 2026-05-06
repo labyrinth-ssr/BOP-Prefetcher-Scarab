@@ -13,10 +13,10 @@ Run:
 # BOP Prefetcher
 
 ## implementation
-see docs/bop-impl.md
+see [](docs/bop-impl.md)
 
 ### correctness test
-see src/prefetcher/bop-verification.md
+see [](docs/bop-verification.md)
 
 # Scarab
 
