@@ -1,0 +1,162 @@
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: scarab-bop-debug-off
+  namespace: ucsc-hsc
+spec:
+  backoffLimit: 0
+  ttlSecondsAfterFinished: 86400
+  template:
+    spec:
+      restartPolicy: Never
+      affinity:
+        nodeAffinity:
+          requiredDuringSchedulingIgnoredDuringExecution:
+            nodeSelectorTerms:
+            - matchExpressions:
+              - key: kubernetes.io/arch
+                operator: In
+                values:
+                - amd64
+      containers:
+      - name: scarab
+        image: ubuntu:focal
+        command: ["/bin/bash", "-c"]
+        args:
+        - |
+          set -e
+
+          echo "=== Install dependencies ==="
+          for attempt in $(seq 1 10); do
+            echo "apt-get update attempt ${attempt}/10"
+            apt-get update \
+              -o Acquire::Retries=5 \
+              -o Acquire::http::Timeout=30 \
+              -o Acquire::https::Timeout=30 \
+              -o Acquire::ForceIPv4=true
+            if apt-cache show python3 libboost-dev bc libsnappy-dev libconfig++-dev >/dev/null 2>&1; then
+              break
+            fi
+            sleep $((attempt * 15))
+          done
+          DEBIAN_FRONTEND=noninteractive apt-get install -y \
+            -o Acquire::Retries=5 \
+            -o Acquire::http::Timeout=30 \
+            -o Acquire::https::Timeout=30 \
+            -o Acquire::ForceIPv4=true \
+            python3 python3-pip git wget cmake binutils \
+            libunwind-dev libboost-dev zlib1g-dev libsnappy-dev liblz4-dev \
+            g++-9 g++-9-multilib libconfig++-dev vim bc unzip
+          update-alternatives --install /usr/bin/g++ g++ /usr/bin/g++-9 1
+          pip3 install gdown
+
+          echo "=== Download traces ==="
+          cd /
+          if [ ! -d "/cse220_traces" ]; then
+            gdown https://drive.google.com/uc?id=1Z4ouWgNrkNnezrq7wxk4OXBpRBm-2CzA
+            tar -xzf cse220_traces.tar.gz
+            rm -f cse220_traces.tar.gz
+          fi
+
+          echo "=== Download PIN ==="
+          export tmpdir="/tmp_home"
+          mkdir -p $tmpdir && cd $tmpdir
+          wget -nc https://software.intel.com/sites/landingpage/pintool/downloads/pin-3.15-98253-gb56e429b1-gcc-linux.tar.gz
+          tar -xzf pin-3.15-98253-gb56e429b1-gcc-linux.tar.gz
+          export PIN_ROOT=$tmpdir/pin-3.15-98253-gb56e429b1-gcc-linux
+          export SCARAB_ENABLE_PT_MEMTRACE=1
+          export LD_LIBRARY_PATH=$PIN_ROOT/extras/xed-intel64/lib:$PIN_ROOT/intel64/runtime/pincrt
+
+          echo "=== Clone BOP branch and build ==="
+          cd /root
+          git clone --branch bop-prefetcher https://github.com/labyrinth-ssr/scarab.git
+          pip3 install -r /root/scarab/bin/requirements.txt
+          cd /root/scarab/src && make clean && make
+          export HOME=/root
+          export SCARABHOME=/root/scarab
+
+          echo "=== Run BOP debug simulations ==="
+          declare -A trace_num
+          trace_num["508.namd_r"]="152234"
+
+          WORKLOADS=(508.namd_r)
+          SIMHOME=/root/exp/simulations
+          WARMUP=1000000
+          INST_LIMIT=5000000
+
+          BOP_ENABLE="--pref_framework_on 1 --pref_ul1_on 1 --pref_bop_on 1 --debug_pref_bop 1 --pref_bop_bad_score 500"
+          DISABLE_OTHER_PREF="--pref_stream_on 0 --l2l1pref_on 0 --l2hit_stream_pref_on 0 --pref_stride_on 0 --pref_stridepc_on 0 --pref_ghb_on 0 --pref_2dc_on 0 --pref_markov_on 0 --pref_phase_on 0 --pref_throttlefb_on 0"
+
+          for workload in "${WORKLOADS[@]}"; do
+            tnum=${trace_num[$workload]}
+            TRACEFILE=/cse220_traces/$workload/traces_simp/$tnum/trace/$tnum.zip
+
+            exp_dir=$SIMHOME/$workload/bop_debug
+            mkdir -p $exp_dir
+            cp $SCARABHOME/src/PARAMS.sunny_cove $exp_dir/PARAMS.in
+
+            echo "--- Running $workload with BOP debug ---"
+            (
+              cd $exp_dir
+              $SCARABHOME/src/scarab \
+                --frontend memtrace \
+                --cbp_trace_r0 $TRACEFILE \
+                --memtrace_roi_begin 1 \
+                --memtrace_roi_end $INST_LIMIT \
+                --inst_limit $INST_LIMIT \
+                --full_warmup $WARMUP \
+                --use_fetched_count=0 \
+                $BOP_ENABLE \
+                $DISABLE_OTHER_PREF &> sim.log
+              echo "DONE: $workload"
+            ) &
+          done
+
+          wait
+          echo "=== All BOP debug simulations complete ==="
+
+          echo ""
+          echo "========================================"
+          echo "=== BOP STAT SUMMARY ==="
+          echo "========================================"
+          for workload in "${WORKLOADS[@]}"; do
+            exp_dir=$SIMHOME/$workload/bop_debug
+            echo ""
+            echo "--- $workload ---"
+            if [ -f "$exp_dir/memory.stat.0.csv" ]; then
+              grep -i "BOP_" "$exp_dir/memory.stat.0.csv" || echo "(no BOP stats found in memory.stat)"
+            fi
+            # Also check other stat files
+            for sf in "$exp_dir"/*.stat.0.csv; do
+              if [ -f "$sf" ] && [ "$sf" != "$exp_dir/memory.stat.0.csv" ]; then
+                matches=$(grep -i "BOP_" "$sf" 2>/dev/null || true)
+                if [ -n "$matches" ]; then
+                  echo "  [$(basename $sf)]"
+                  echo "$matches"
+                fi
+              fi
+            done
+            echo ""
+            echo "--- DEBUG log tail (last 100 BOP lines) ---"
+            grep -i "bop\|PHASE\|RR hit\|RR insert\|DROPPED\|INFLIGHT" "$exp_dir/sim.log" | tail -100 || echo "(no debug output)"
+            echo ""
+          done
+
+          echo "=== Copy results to PVC ==="
+          mkdir -p /results/exp/simulations
+          cp -a /root/exp/simulations/. /results/exp/simulations/
+          echo "=== BOP DEBUG JOB DONE ==="
+        volumeMounts:
+        - name: results
+          mountPath: /results
+        resources:
+          requests:
+            cpu: "8"
+            memory: "16Gi"
+          limits:
+            cpu: "8"
+            memory: "16Gi"
+      volumes:
+      - name: results
+        persistentVolumeClaim:
+          claimName: scarab-results

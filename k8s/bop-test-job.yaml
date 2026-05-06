@@ -1,0 +1,84 @@
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: scarab-bop-test
+  namespace: ucsc-hsc
+spec:
+  backoffLimit: 0
+  ttlSecondsAfterFinished: 86400
+  template:
+    spec:
+      restartPolicy: Never
+      affinity:
+        nodeAffinity:
+          requiredDuringSchedulingIgnoredDuringExecution:
+            nodeSelectorTerms:
+            - matchExpressions:
+              - key: kubernetes.io/arch
+                operator: In
+                values:
+                - amd64
+      containers:
+      - name: scarab
+        image: ubuntu:focal
+        command: ["/bin/bash", "-c"]
+        args:
+        - |
+          set -e
+
+          echo "=== Install dependencies ==="
+          for attempt in $(seq 1 10); do
+            echo "apt-get update attempt ${attempt}/10"
+            apt-get update \
+              -o Acquire::Retries=5 \
+              -o Acquire::http::Timeout=30 \
+              -o Acquire::https::Timeout=30 \
+              -o Acquire::ForceIPv4=true
+            if apt-cache show python3 libboost-dev bc libsnappy-dev libconfig++-dev >/dev/null 2>&1; then
+              break
+            fi
+            sleep $((attempt * 15))
+          done
+          DEBIAN_FRONTEND=noninteractive apt-get install -y \
+            -o Acquire::Retries=5 \
+            -o Acquire::http::Timeout=30 \
+            -o Acquire::https::Timeout=30 \
+            -o Acquire::ForceIPv4=true \
+            python3 python3-pip git wget cmake binutils \
+            libunwind-dev libboost-dev zlib1g-dev libsnappy-dev liblz4-dev \
+            g++-9 g++-9-multilib libconfig++-dev vim bc unzip
+          update-alternatives --install /usr/bin/g++ g++ /usr/bin/g++-9 1
+
+          echo "=== Download PIN ==="
+          export tmpdir="/tmp_home"
+          mkdir -p $tmpdir
+          cd $tmpdir
+          wget -nc https://software.intel.com/sites/landingpage/pintool/downloads/pin-3.15-98253-gb56e429b1-gcc-linux.tar.gz
+          tar -xzf pin-3.15-98253-gb56e429b1-gcc-linux.tar.gz
+          export PIN_ROOT=$tmpdir/pin-3.15-98253-gb56e429b1-gcc-linux
+          export SCARAB_ENABLE_PT_MEMTRACE=1
+          export LD_LIBRARY_PATH=$PIN_ROOT/extras/xed-intel64/lib:$PIN_ROOT/intel64/runtime/pincrt
+
+          echo "=== Clone BOP branch ==="
+          cd /root
+          git clone --branch bop-prefetcher https://github.com/labyrinth-ssr/scarab.git
+          pip3 install -r /root/scarab/bin/requirements.txt
+
+          echo "=== Build Scarab ==="
+          cd /root/scarab/src
+          make clean
+          make
+
+          echo "=== Verify BOP files and binary ==="
+          test -x /root/scarab/src/scarab
+          test -f /root/scarab/src/prefetcher/pref_bop.c
+          grep -q "pref_bop_on" /root/scarab/src/prefetcher/pref_bop.param.def
+          git rev-parse --short HEAD
+          echo "=== BOP k8s build test passed ==="
+        resources:
+          requests:
+            cpu: "8"
+            memory: "16Gi"
+          limits:
+            cpu: "8"
+            memory: "16Gi"

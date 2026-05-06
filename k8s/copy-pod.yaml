@@ -1,0 +1,25 @@
+apiVersion: v1
+kind: Pod
+metadata:
+  name: scarab-copy
+  namespace: ucsc-hsc
+spec:
+  containers:
+  - name: copy
+    image: ubuntu:focal
+    command: ["sleep", "3600"]
+    volumeMounts:
+    - name: results
+      mountPath: /results
+    resources:
+      requests:
+        cpu: "100m"
+        memory: "256Mi"
+      limits:
+        cpu: "200m"
+        memory: "512Mi"
+  volumes:
+  - name: results
+    persistentVolumeClaim:
+      claimName: scarab-results
+  restartPolicy: Never

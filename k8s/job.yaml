@@ -1,0 +1,190 @@
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: scarab-lab1
+  namespace: ucsc-hsc
+spec:
+  backoffLimit: 2
+  ttlSecondsAfterFinished: 86400
+  template:
+    spec:
+      restartPolicy: Never
+      affinity:
+        nodeAffinity:
+          requiredDuringSchedulingIgnoredDuringExecution:
+            nodeSelectorTerms:
+            - matchExpressions:
+              - key: kubernetes.io/arch
+                operator: In
+                values:
+                - amd64
+      containers:
+      - name: scarab
+        image: ubuntu:focal
+        command: ["/bin/bash", "-c"]
+        args:
+        - |
+          set -e
+
+          echo "=== Step 1: Install dependencies ==="
+          apt-get update && DEBIAN_FRONTEND=noninteractive apt-get install -y \
+            python3 python3-pip git wget cmake binutils \
+            libunwind-dev libboost-dev zlib1g-dev libsnappy-dev liblz4-dev \
+            g++-9 g++-9-multilib libconfig++-dev vim bc unzip
+          update-alternatives --install /usr/bin/g++ g++ /usr/bin/g++-9 1
+          pip3 install gdown matplotlib
+
+          echo "=== Step 2: Download traces ==="
+          cd /
+          if [ ! -d "/cse220_traces" ]; then
+            gdown https://drive.google.com/uc?id=1Z4ouWgNrkNnezrq7wxk4OXBpRBm-2CzA
+            tar -xzf cse220_traces.tar.gz
+            rm -f cse220_traces.tar.gz
+          fi
+
+          echo "=== Step 3: Download PIN ==="
+          export tmpdir="/tmp_home"
+          mkdir -p $tmpdir && cd $tmpdir
+          wget -nc https://software.intel.com/sites/landingpage/pintool/downloads/pin-3.15-98253-gb56e429b1-gcc-linux.tar.gz
+          tar -xzf pin-3.15-98253-gb56e429b1-gcc-linux.tar.gz
+          export PIN_ROOT=$tmpdir/pin-3.15-98253-gb56e429b1-gcc-linux
+          export SCARAB_ENABLE_PT_MEMTRACE=1
+          export LD_LIBRARY_PATH=$PIN_ROOT/extras/xed-intel64/lib:$PIN_ROOT/intel64/runtime/pincrt
+
+          echo "=== Step 4: Clone and build Scarab ==="
+          cd /root
+          if [ ! -d "/root/scarab" ]; then
+            git clone https://github.com/Litz-Lab/scarab.git
+          fi
+          pip3 install -r /root/scarab/bin/requirements.txt
+          cd /root/scarab/src && make clean && make
+          export HOME=/root
+          export SCARABHOME=/root/scarab
+
+          echo "=== Step 5: Create lab1.json ==="
+          cat > /root/lab1.json << 'LABEOF'
+          {
+              "architecture": "sunny_cove",
+              "workloads_list": [
+                  "500.perlbench_r", "502.gcc_r", "503.bwaves_r", "505.mcf_r",
+                  "507.cactuBSSN_r", "508.namd_r", "510.parest_r", "511.povray_r",
+                  "519.lbm_r", "520.omnetpp_r", "521.wrf_r", "523.xalancbmk_r",
+                  "525.x264_r", "526.blender_r", "527.cam4_r", "531.deepsjeng_r",
+                  "538.imagick_r", "541.leela_r", "544.nab_r", "548.exchange2_r",
+                  "549.fotonik3d_r", "554.roms_r", "557.xz_r"
+              ],
+              "experiment": "lab1",
+              "configurations": {
+                  "map2_width2": "--map_cycles 2 --issue_width 2 --node_ret_width 2",
+                  "map2_width10": "--map_cycles 2 --issue_width 10 --node_ret_width 10",
+                  "map10_width2": "--map_cycles 10 --issue_width 2 --node_ret_width 2",
+                  "map10_width10": "--map_cycles 10 --issue_width 10 --node_ret_width 10"
+              }
+          }
+          LABEOF
+
+          echo "=== Step 6: Run all 92 simulations ==="
+          declare -A trace_num
+          trace_num["500.perlbench_r"]="12569"
+          trace_num["502.gcc_r"]="35835"
+          trace_num["503.bwaves_r"]="14021"
+          trace_num["505.mcf_r"]="26322"
+          trace_num["507.cactuBSSN_r"]="430"
+          trace_num["508.namd_r"]="152234"
+          trace_num["510.parest_r"]="157069"
+          trace_num["511.povray_r"]="77803"
+          trace_num["519.lbm_r"]="34969"
+          trace_num["520.omnetpp_r"]="93640"
+          trace_num["521.wrf_r"]="5637"
+          trace_num["523.xalancbmk_r"]="7528"
+          trace_num["525.x264_r"]="165858"
+          trace_num["526.blender_r"]="63365"
+          trace_num["527.cam4_r"]="125439"
+          trace_num["531.deepsjeng_r"]="76011"
+          trace_num["538.imagick_r"]="204585"
+          trace_num["541.leela_r"]="124510"
+          trace_num["544.nab_r"]="89675"
+          trace_num["548.exchange2_r"]="121021"
+          trace_num["549.fotonik3d_r"]="65898"
+          trace_num["554.roms_r"]="112106"
+          trace_num["557.xz_r"]="34585"
+
+          WORKLOADS=(500.perlbench_r 502.gcc_r 503.bwaves_r 505.mcf_r 507.cactuBSSN_r 508.namd_r 510.parest_r 511.povray_r 519.lbm_r 520.omnetpp_r 521.wrf_r 523.xalancbmk_r 525.x264_r 526.blender_r 527.cam4_r 531.deepsjeng_r 538.imagick_r 541.leela_r 544.nab_r 548.exchange2_r 549.fotonik3d_r 554.roms_r 557.xz_r)
+          CONFIGS=("map2_width2:--map_cycles 2 --issue_width 2 --node_ret_width 2" "map2_width10:--map_cycles 2 --issue_width 10 --node_ret_width 10" "map10_width2:--map_cycles 10 --issue_width 2 --node_ret_width 2" "map10_width10:--map_cycles 10 --issue_width 10 --node_ret_width 10")
+
+          SIMHOME=/root/exp/simulations
+          WARMUP=10000000
+          MAX_PARALLEL=8
+          pids=()
+
+          for workload in "${WORKLOADS[@]}"; do
+            tnum=${trace_num[$workload]}
+            MODULESDIR=/cse220_traces/$workload/traces_simp/$tnum/raw
+            TRACEFILE=/cse220_traces/$workload/traces_simp/$tnum/trace/$tnum.zip
+
+            for config_entry in "${CONFIGS[@]}"; do
+              config_name="${config_entry%%:*}"
+              config_params="${config_entry#*:}"
+
+              exp_dir=$SIMHOME/$workload/lab1/$config_name
+              if [ -f "$exp_dir/memory.stat.0.csv" ]; then
+                echo "SKIP: $workload/$config_name already done"
+                continue
+              fi
+
+              mkdir -p $exp_dir
+              cp $SCARABHOME/src/PARAMS.sunny_cove $exp_dir/PARAMS.in
+
+              (
+                cd $exp_dir
+                $SCARABHOME/src/scarab \
+                  --frontend memtrace \
+                  --cbp_trace_r0 $TRACEFILE \
+                  --memtrace_roi_begin 1 \
+                  --memtrace_roi_end 20000000 \
+                  --inst_limit 20000000 \
+                  --full_warmup $WARMUP \
+                  --use_fetched_count=0 \
+                  $config_params &> sim.log
+                echo "DONE: $workload/$config_name"
+              ) &
+              pids+=($!)
+
+              # Limit parallelism
+              while [ ${#pids[@]} -ge $MAX_PARALLEL ]; do
+                new_pids=()
+                for pid in "${pids[@]}"; do
+                  if kill -0 $pid 2>/dev/null; then
+                    new_pids+=($pid)
+                  fi
+                done
+                pids=("${new_pids[@]}")
+                if [ ${#pids[@]} -ge $MAX_PARALLEL ]; then
+                  sleep 5
+                fi
+              done
+            done
+          done
+
+          echo "Waiting for all simulations to finish..."
+          wait
+          echo "=== All simulations complete ==="
+
+          echo "=== Step 7: Copy results to PVC ==="
+          cp -r /root/exp /results/exp
+          cp /root/lab1.json /results/lab1.json
+          echo "=== DONE ==="
+        volumeMounts:
+        - name: results
+          mountPath: /results
+        resources:
+          requests:
+            cpu: "8"
+            memory: "16Gi"
+          limits:
+            cpu: "8"
+            memory: "16Gi"
+      volumes:
+      - name: results
+        persistentVolumeClaim:
+          claimName: scarab-results
