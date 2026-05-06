@@ -13,7 +13,7 @@ Run:
 # BOP Prefetcher
 
 ## implementation
-see [docs/bop-impl.md](docs/bop-impl.md)
+see [docs/pref_bop_impl.md](docs/pref_bop_impl.md)
 
 ### correctness test
 see [docs/bop-verification.md](docs/bop-verification.md)
