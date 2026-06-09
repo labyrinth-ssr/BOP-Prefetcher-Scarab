@@ -1,0 +1,70 @@
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: scarab-bop-microbench
+  namespace: ucsc-hsc
+spec:
+  backoffLimit: 0
+  ttlSecondsAfterFinished: 86400
+  template:
+    spec:
+      restartPolicy: Never
+      affinity:
+        nodeAffinity:
+          requiredDuringSchedulingIgnoredDuringExecution:
+            nodeSelectorTerms:
+            - matchExpressions:
+              - key: kubernetes.io/arch
+                operator: In
+                values:
+                - amd64
+      containers:
+      - name: bop-microbench
+        image: ubuntu:focal
+        command: ["/bin/bash", "-c"]
+        args:
+        - |
+          set -euo pipefail
+
+          echo "=== Install microbench dependencies ==="
+          apt-get update \
+            -o Acquire::Retries=5 \
+            -o Acquire::http::Timeout=30 \
+            -o Acquire::https::Timeout=30 \
+            -o Acquire::ForceIPv4=true
+          DEBIAN_FRONTEND=noninteractive apt-get install -y \
+            -o Acquire::Retries=5 \
+            -o Acquire::http::Timeout=30 \
+            -o Acquire::https::Timeout=30 \
+            -o Acquire::ForceIPv4=true \
+            git gcc libc6-dev
+
+          echo "=== Clone BOP branch ==="
+          cd /root
+          git clone --branch bop-prefetcher https://github.com/labyrinth-ssr/scarab.git
+          cd /root/scarab
+          git rev-parse --short HEAD
+
+          echo "=== Verify microbench files ==="
+          test -f tests/prefetcher/bop_microbench_test.c
+          test -x tests/prefetcher/run_bop_microbench.sh
+
+          echo "=== Run BOP microbench ==="
+          mkdir -p /results/bop_microbench
+          tests/prefetcher/run_bop_microbench.sh 2>&1 | tee /results/bop_microbench/bop_microbench.log
+
+          echo "=== BOP MICROBENCH PASSED ==="
+        volumeMounts:
+        - name: results
+          mountPath: /results
+        resources:
+          requests:
+            cpu: "1"
+            memory: "1Gi"
+          limits:
+            cpu: "1"
+            memory: "1Gi"
+      volumes:
+      - name: results
+        persistentVolumeClaim:
+          claimName: scarab-results

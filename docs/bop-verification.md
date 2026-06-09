@@ -53,6 +53,16 @@ Five properties were targeted for verification:
 
 All experiments ran on Kubernetes (namespace `ucsc-hsc`, amd64 nodes). Scarab was built from the `bop-prefetcher` branch with BOP enabled (`--pref_bop_on 1 --pref_ul1_on 1`) and all other prefetchers disabled. Short traces were used (5M instructions, 1M warmup) for fast iteration.
 
+### Controlled microbenchmark
+
+`k8s/bop-microbench-job.yaml` runs a standalone BOP harness inside Kubernetes. It directly drives `pref_bop_ul1_miss()` with controlled line-address streams and validates the same BOP counters used by full Scarab runs:
+
+- sequential stream: expects `BOP_PREF_ISSUED > 0`, `BOP_RR_FILL_UPDATES > 0`, `BOP_RR_HIT_SCORE_INC > 0`, and `BOP_PHASE_PREF_ON > 0`
+- random-ish stream: expects low score hits, no ON phase, at least one OFF phase, and issuing to stop after the first low-score phase
+- page-boundary stream: expects `BOP_PREF_DROPPED_PAGE > 0`
+
+The job writes its summary to `/results/bop_microbench/bop_microbench.log` on the `scarab-results` PVC.
+
 ### Experiment 1: Memory-intensive workloads
 
 **Workloads**: `519.lbm_r` (streaming), `505.mcf_r` (pointer-chasing)
@@ -250,5 +260,4 @@ DEF_PARAM(debug_pref_bop, DEBUG_PREF_BOP, Flag, Flag, FALSE, )
 It does NOT need to be added to `debug.param.def` -- it lives in the BOP-specific param file, which is the same pattern other prefetchers can use. Note
 that the generic `DEBUG_PREF` flag is separately in `src/debug/debug.param.def` (line 126), but
 `DEBUG_PREF_BOP` is BOP-specific and already properly set up. It defaults to FALSE and can be enabled at runtime.
-
 
