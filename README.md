@@ -20,10 +20,6 @@ see [docs/bop-verification.md](docs/bop-verification.md)
 
 for unit test and microbench test, see [best-offset-prefetcher/correctness_report.md](best-offset-prefetcher/correctness_report.md)
 
-#### unit test
-
-
-#### microbench test
 
 ## how to run
 
