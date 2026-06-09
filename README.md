@@ -18,6 +18,11 @@ see [docs/pref_bop_impl.md](docs/pref_bop_impl.md)
 ### correctness test
 see [docs/bop-verification.md](docs/bop-verification.md)
 
+#### unit test
+
+
+#### microbench test
+
 ## how to run
 
 see  [k8s/bop-test-job.yaml](k8s/bop-test-job.yaml) and [k8s/bop-debug-job.yaml](k8s/bop-debug-job.yaml)
@@ -25,6 +30,8 @@ see  [k8s/bop-test-job.yaml](k8s/bop-test-job.yaml) and [k8s/bop-debug-job.yaml]
 ## evaluation results
 
 see [best-offset-prefetcher/report.md](best-offset-prefetcher/report.md)
+
+for parameter sensitivity experiments, see [best-offset-prefetcher/sensitivity_report.md](best-offset-prefetcher/sensitivity_report.md)
 
 ### how to run
 
