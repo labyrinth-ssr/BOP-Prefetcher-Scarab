@@ -9,26 +9,26 @@
 #include "../../src/globals/global_types.h"
 #include "../../src/prefetcher/pref_common.h"
 
-const uns NUM_CORES = 1;
-const uns DCACHE_LINE_SIZE = 64;
+uns NUM_CORES = 1;
+uns DCACHE_LINE_SIZE = 64;
 
-const Flag PREF_UL1_ON = TRUE;
-const Flag PREF_UMLC_ON = FALSE;
+Flag PREF_UL1_ON = TRUE;
+Flag PREF_UMLC_ON = FALSE;
 
-const Flag PREF_BOP_ON = TRUE;
-const Flag DEBUG_PREF_BOP = FALSE;
-const uns PREF_BOP_RR_ENTRIES = 64;
-const uns PREF_BOP_RR_TAG_BITS = 0;
-const uns PREF_BOP_INFLIGHT_ENTRIES = 64;
-const uns PREF_BOP_SCORE_MAX = 2;
-const uns PREF_BOP_ROUND_MAX = 2;
-const uns PREF_BOP_BAD_SCORE = 1;
-const uns PREF_BOP_MAX_OFFSET = 4;
-const Flag PREF_BOP_SMALL_PRIME_OFFSETS = FALSE;
-const int PREF_BOP_START_OFFSET = 1;
-const uns64 PREF_BOP_PAGE_BYTES = 256;
-const Flag PREF_BOP_PREFETCH_ON_MISS = TRUE;
-const Flag PREF_BOP_PREFETCH_ON_PREFHIT = TRUE;
+Flag PREF_BOP_ON = TRUE;
+Flag DEBUG_PREF_BOP = FALSE;
+uns PREF_BOP_RR_ENTRIES = 64;
+uns PREF_BOP_RR_TAG_BITS = 0;
+uns PREF_BOP_INFLIGHT_ENTRIES = 64;
+uns PREF_BOP_SCORE_MAX = 2;
+uns PREF_BOP_ROUND_MAX = 2;
+uns PREF_BOP_BAD_SCORE = 1;
+uns PREF_BOP_MAX_OFFSET = 4;
+Flag PREF_BOP_SMALL_PRIME_OFFSETS = FALSE;
+int PREF_BOP_START_OFFSET = 1;
+uns64 PREF_BOP_PAGE_BYTES = 256;
+Flag PREF_BOP_PREFETCH_ON_MISS = TRUE;
+Flag PREF_BOP_PREFETCH_ON_PREFHIT = TRUE;
 
 static uns ul1_queue_adds;
 static Addr last_ul1_pref_index;
