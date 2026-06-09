@@ -22,6 +22,14 @@ see [docs/bop-verification.md](docs/bop-verification.md)
 
 see  [k8s/bop-test-job.yaml](k8s/bop-test-job.yaml) and [k8s/bop-debug-job.yaml](k8s/bop-debug-job.yaml)
 
+## evaluation results
+
+see [best-offset-prefetcher/report.md](best-offset-prefetcher/report.md)
+
+### how to run
+
+see [k8s/bop-eval-lab3-rest-job.yaml](k8s/bop-eval-lab3-rest-job.yaml)
+
 # Scarab
 
 Scarab is a cycle accurate simulator for state-of-the-art, high performance,

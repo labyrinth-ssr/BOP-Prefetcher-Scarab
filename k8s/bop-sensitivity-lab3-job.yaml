@@ -1,0 +1,364 @@
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: scarab-bop-sensitivity-lab3
+  namespace: ucsc-hsc
+spec:
+  backoffLimit: 0
+  ttlSecondsAfterFinished: 86400
+  template:
+    spec:
+      restartPolicy: Never
+      affinity:
+        nodeAffinity:
+          requiredDuringSchedulingIgnoredDuringExecution:
+            nodeSelectorTerms:
+            - matchExpressions:
+              - key: kubernetes.io/arch
+                operator: In
+                values:
+                - amd64
+      containers:
+      - name: scarab
+        image: ubuntu:focal
+        command: ["/bin/bash", "-c"]
+        args:
+        - |
+          set -euo pipefail
+
+          echo "=== Install dependencies ==="
+          for attempt in $(seq 1 10); do
+            echo "apt-get update attempt ${attempt}/10"
+            apt-get update \
+              -o Acquire::Retries=5 \
+              -o Acquire::http::Timeout=30 \
+              -o Acquire::https::Timeout=30 \
+              -o Acquire::ForceIPv4=true
+            if apt-cache show python3 libboost-dev bc libsnappy-dev libconfig++-dev >/dev/null 2>&1; then
+              break
+            fi
+            sleep $((attempt * 15))
+          done
+          DEBIAN_FRONTEND=noninteractive apt-get install -y \
+            -o Acquire::Retries=5 \
+            -o Acquire::http::Timeout=30 \
+            -o Acquire::https::Timeout=30 \
+            -o Acquire::ForceIPv4=true \
+            python3 python3-pip git wget cmake binutils \
+            libunwind-dev libboost-dev zlib1g-dev libsnappy-dev liblz4-dev \
+            g++-9 g++-9-multilib libconfig++-dev vim bc unzip
+          update-alternatives --install /usr/bin/g++ g++ /usr/bin/g++-9 1
+          pip3 install gdown
+
+          echo "=== Download traces ==="
+          cd /
+          if [ ! -d "/cse220_traces" ]; then
+            gdown https://drive.google.com/uc?id=1Z4ouWgNrkNnezrq7wxk4OXBpRBm-2CzA
+            tar -xzf cse220_traces.tar.gz
+            rm -f cse220_traces.tar.gz
+          fi
+
+          echo "=== Download PIN ==="
+          export tmpdir="/tmp_home"
+          mkdir -p $tmpdir && cd $tmpdir
+          wget -nc https://software.intel.com/sites/landingpage/pintool/downloads/pin-3.15-98253-gb56e429b1-gcc-linux.tar.gz
+          tar -xzf pin-3.15-98253-gb56e429b1-gcc-linux.tar.gz
+          export PIN_ROOT=$tmpdir/pin-3.15-98253-gb56e429b1-gcc-linux
+          export SCARAB_ENABLE_PT_MEMTRACE=1
+          export LD_LIBRARY_PATH=$PIN_ROOT/extras/xed-intel64/lib:$PIN_ROOT/intel64/runtime/pincrt
+
+          echo "=== Clone BOP branch and build ==="
+          cd /root
+          git clone --branch bop-prefetcher https://github.com/labyrinth-ssr/scarab.git
+          cd /root/scarab
+          git rev-parse --short HEAD
+          pip3 install -r /root/scarab/bin/requirements.txt
+          cd /root/scarab/src && make clean && make
+          export HOME=/root
+          export SCARABHOME=/root/scarab
+
+          echo "=== Create BOP sensitivity descriptor ==="
+          cat > /root/bop_sensitivity_lab3.json << 'JSONEOF'
+          {
+              "architecture": "sunny_cove",
+              "experiment": "bop_sensitivity_lab3",
+              "warmup": 1000000,
+              "inst_limit": 5000000,
+              "max_parallel": 4,
+              "workloads_list": [
+                  "500.perlbench_r", "502.gcc_r", "507.cactuBSSN_r",
+                  "520.omnetpp_r", "525.x264_r", "531.deepsjeng_r",
+                  "557.xz_r"
+              ],
+              "purpose": "Single-factor sensitivity sweep for BOP RR size, score thresholds, learning rounds, and offset list."
+          }
+          JSONEOF
+
+          cat > /root/parse_bop_sensitivity.py << 'PYEOF'
+          #!/usr/bin/env python3
+          import argparse
+          import csv
+          from pathlib import Path
+
+          def read_stats(path):
+            stats = {}
+            if not path.exists():
+              return stats
+            with path.open(newline="") as f:
+              for row in csv.reader(f):
+                if len(row) < 3:
+                  continue
+                name = row[0].strip()
+                if not name or name == "Core":
+                  continue
+                try:
+                  stats[name] = float(row[2].strip())
+                except ValueError:
+                  continue
+            return stats
+
+          def get(stats, name):
+            return stats.get(f"{name}_total_count", stats.get(name, 0.0))
+
+          def safe_div(num, den):
+            return num / den if den else 0.0
+
+          def parse_run(run_dir):
+            core = read_stats(run_dir / "core.stat.0.csv")
+            memory = read_stats(run_dir / "memory.stat.0.csv")
+            pref = read_stats(run_dir / "pref.stat.0.csv")
+            bop = read_stats(run_dir / "pref_bop.stat.0.csv")
+
+            inst = get(core, "NODE_INST_COUNT")
+            cycles = get(core, "NODE_CYCLE")
+            dcache_miss = get(memory, "DCACHE_MISS")
+            dcache_hit = get(memory, "DCACHE_HIT")
+            mlc_miss = get(memory, "MLC_MISS")
+            mlc_hit = get(memory, "MLC_HIT")
+            pref_issued = max(
+                get(pref, "PREF_UL1REQ_QUEUE_SENTREQ") + get(pref, "PREF_UMLC_REQ_QUEUE_SENTREQ"),
+                get(bop, "BOP_PREF_ISSUED"),
+            )
+            pref_useful = max(get(pref, "L1_PREF_UNIQUE_HIT"), get(pref, "L1_PREF_HIT"))
+            bop_phase_complete = get(bop, "BOP_PHASE_COMPLETE")
+            bop_test_offset_events = get(bop, "BOP_TEST_OFFSET_EVENTS")
+            bop_pref_issued = get(bop, "BOP_PREF_ISSUED")
+
+            return {
+                "completed": 1.0 if (run_dir / "memory.stat.0.csv").exists() else 0.0,
+                "instructions": inst,
+                "cycles": cycles,
+                "ipc": safe_div(inst, cycles),
+                "dcache_hit": dcache_hit,
+                "dcache_miss": dcache_miss,
+                "dcache_miss_rate": safe_div(dcache_miss, dcache_miss + dcache_hit),
+                "mlc_hit": mlc_hit,
+                "mlc_miss": mlc_miss,
+                "mlc_miss_rate": safe_div(mlc_miss, mlc_miss + mlc_hit),
+                "pref_issued": pref_issued,
+                "pref_useful": pref_useful,
+                "pref_accuracy": safe_div(pref_useful, pref_issued),
+                "bop_pref_issued": bop_pref_issued,
+                "bop_rr_fill_updates": get(bop, "BOP_RR_FILL_UPDATES"),
+                "bop_rr_hit_score_inc": get(bop, "BOP_RR_HIT_SCORE_INC"),
+                "bop_phase_complete": bop_phase_complete,
+                "bop_phase_on": get(bop, "BOP_PHASE_PREF_ON"),
+                "bop_phase_off": get(bop, "BOP_PHASE_PREF_OFF"),
+                "bop_phase_on_ratio": safe_div(get(bop, "BOP_PHASE_PREF_ON"), bop_phase_complete),
+                "bop_dropped_page": get(bop, "BOP_PREF_DROPPED_PAGE"),
+                "bop_dropped_page_ratio": safe_div(get(bop, "BOP_PREF_DROPPED_PAGE"), bop_pref_issued + get(bop, "BOP_PREF_DROPPED_PAGE")),
+                "bop_test_offset_events": bop_test_offset_events,
+                "bop_rr_hit_score_rate": safe_div(get(bop, "BOP_RR_HIT_SCORE_INC"), bop_test_offset_events),
+                "bop_inflight_insert": get(bop, "BOP_INFLIGHT_INSERT"),
+                "bop_inflight_miss": get(bop, "BOP_INFLIGHT_MISS"),
+            }
+
+          def main():
+            parser = argparse.ArgumentParser()
+            parser.add_argument("simhome", type=Path)
+            parser.add_argument("--experiment", default="bop_sensitivity_lab3")
+            parser.add_argument("--output", type=Path, required=True)
+            args = parser.parse_args()
+
+            rows = []
+            for workload_dir in sorted(p for p in args.simhome.iterdir() if p.is_dir()):
+              workload = workload_dir.name
+              base_dir = workload_dir / args.experiment
+              if not base_dir.exists():
+                continue
+              config_dirs = sorted(p for p in base_dir.iterdir() if p.is_dir())
+              parsed = {config_dir.name: parse_run(config_dir) for config_dir in config_dirs}
+              no_pref = parsed.get("no_pref", {})
+              bop_default = parsed.get("bop_default", {})
+              no_pref_ipc = no_pref.get("ipc", 0.0)
+              bop_default_ipc = bop_default.get("ipc", 0.0)
+              no_pref_dcache_miss = no_pref.get("dcache_miss", 0.0)
+              no_pref_mlc_miss = no_pref.get("mlc_miss", 0.0)
+
+              for config in sorted(parsed):
+                data = parsed[config]
+                row = {
+                    "workload": workload,
+                    "config": config,
+                    **data,
+                    "speedup_vs_no_pref": safe_div(data["ipc"], no_pref_ipc),
+                    "speedup_vs_bop_default": safe_div(data["ipc"], bop_default_ipc),
+                    "dcache_miss_reduction_vs_no_pref": 1.0 - safe_div(data["dcache_miss"], no_pref_dcache_miss) if no_pref_dcache_miss else 0.0,
+                    "mlc_miss_reduction_vs_no_pref": 1.0 - safe_div(data["mlc_miss"], no_pref_mlc_miss) if no_pref_mlc_miss else 0.0,
+                    "pref_coverage_vs_no_pref": safe_div(data["pref_useful"], no_pref_dcache_miss),
+                }
+                rows.append(row)
+
+            fieldnames = [
+                "workload", "config", "completed", "instructions", "cycles", "ipc",
+                "speedup_vs_no_pref", "speedup_vs_bop_default",
+                "dcache_hit", "dcache_miss", "dcache_miss_rate", "dcache_miss_reduction_vs_no_pref",
+                "mlc_hit", "mlc_miss", "mlc_miss_rate", "mlc_miss_reduction_vs_no_pref",
+                "pref_issued", "pref_useful", "pref_accuracy", "pref_coverage_vs_no_pref",
+                "bop_pref_issued", "bop_rr_fill_updates", "bop_rr_hit_score_inc",
+                "bop_phase_complete", "bop_phase_on", "bop_phase_off", "bop_phase_on_ratio",
+                "bop_dropped_page", "bop_dropped_page_ratio", "bop_test_offset_events",
+                "bop_rr_hit_score_rate", "bop_inflight_insert", "bop_inflight_miss",
+            ]
+
+            args.output.parent.mkdir(parents=True, exist_ok=True)
+            with args.output.open("w", newline="") as f:
+              writer = csv.DictWriter(f, fieldnames=fieldnames)
+              writer.writeheader()
+              writer.writerows(rows)
+            print(f"Wrote {len(rows)} rows to {args.output}")
+
+          if __name__ == "__main__":
+            main()
+          PYEOF
+          chmod +x /root/parse_bop_sensitivity.py
+
+          echo "=== Run BOP sensitivity matrix ==="
+          declare -A trace_num
+          trace_num["500.perlbench_r"]="12569"
+          trace_num["502.gcc_r"]="35835"
+          trace_num["507.cactuBSSN_r"]="430"
+          trace_num["520.omnetpp_r"]="93640"
+          trace_num["525.x264_r"]="165858"
+          trace_num["531.deepsjeng_r"]="76011"
+          trace_num["557.xz_r"]="34585"
+
+          WORKLOADS=(500.perlbench_r 502.gcc_r 507.cactuBSSN_r 520.omnetpp_r 525.x264_r 531.deepsjeng_r 557.xz_r)
+
+          BASE_BOP="--pref_framework_on 1 --pref_ul1_on 1 --pref_bop_on 1 --l2l1pref_on 0 --pref_stream_on 0 --pref_stride_on 0 --pref_stridepc_on 0 --pref_ghb_on 0 --pref_2dc_on 0 --pref_markov_on 0 --pref_phase_on 0"
+          CONFIGS=(
+            "no_pref:--pref_framework_on 0 --l2l1pref_on 0"
+            "bop_default:${BASE_BOP}"
+            "rr_64:${BASE_BOP} --pref_bop_rr_entries 64"
+            "rr_128:${BASE_BOP} --pref_bop_rr_entries 128"
+            "rr_512:${BASE_BOP} --pref_bop_rr_entries 512"
+            "rr_1024:${BASE_BOP} --pref_bop_rr_entries 1024"
+            "bad_0:${BASE_BOP} --pref_bop_bad_score 0"
+            "bad_2:${BASE_BOP} --pref_bop_bad_score 2"
+            "bad_4:${BASE_BOP} --pref_bop_bad_score 4"
+            "score_15:${BASE_BOP} --pref_bop_score_max 15"
+            "score_63:${BASE_BOP} --pref_bop_score_max 63"
+            "round_50:${BASE_BOP} --pref_bop_round_max 50"
+            "round_200:${BASE_BOP} --pref_bop_round_max 200"
+            "off_prime_64:${BASE_BOP} --pref_bop_small_prime_offsets 1 --pref_bop_max_offset 64"
+            "off_prime_128:${BASE_BOP} --pref_bop_small_prime_offsets 1 --pref_bop_max_offset 128"
+            "off_prime_512:${BASE_BOP} --pref_bop_small_prime_offsets 1 --pref_bop_max_offset 512"
+            "off_all_32:${BASE_BOP} --pref_bop_small_prime_offsets 0 --pref_bop_max_offset 32"
+            "off_all_64:${BASE_BOP} --pref_bop_small_prime_offsets 0 --pref_bop_max_offset 64"
+            "off_all_128:${BASE_BOP} --pref_bop_small_prime_offsets 0 --pref_bop_max_offset 128"
+          )
+
+          mkdir -p /root/exp
+          {
+            printf "config,params\n"
+            for config_entry in "${CONFIGS[@]}"; do
+              config_name="${config_entry%%:*}"
+              config_params="${config_entry#*:}"
+              printf "%s,\"%s\"\n" "$config_name" "$config_params"
+            done
+          } > /root/exp/bop_sensitivity_lab3_configs.csv
+
+          SIMHOME=/root/exp/simulations
+          EXPERIMENT=bop_sensitivity_lab3
+          WARMUP=1000000
+          INST_LIMIT=5000000
+          MAX_PARALLEL=4
+          DISABLE_THROTTLE="--pref_throttlefb_on 0 --pref_throttle_on 0"
+          pids=()
+
+          for workload in "${WORKLOADS[@]}"; do
+            tnum=${trace_num[$workload]}
+            TRACEFILE=/cse220_traces/$workload/traces_simp/$tnum/trace/$tnum.zip
+
+            for config_entry in "${CONFIGS[@]}"; do
+              config_name="${config_entry%%:*}"
+              config_params="${config_entry#*:}"
+              exp_dir=$SIMHOME/$workload/$EXPERIMENT/$config_name
+
+              mkdir -p $exp_dir
+              cp $SCARABHOME/src/PARAMS.sunny_cove $exp_dir/PARAMS.in
+
+              (
+                cd $exp_dir
+                echo "RUN: $workload/$config_name"
+                $SCARABHOME/src/scarab \
+                  --frontend memtrace \
+                  --cbp_trace_r0 $TRACEFILE \
+                  --memtrace_roi_begin 1 \
+                  --memtrace_roi_end $INST_LIMIT \
+                  --inst_limit $INST_LIMIT \
+                  --full_warmup $WARMUP \
+                  --use_fetched_count=0 \
+                  $config_params \
+                  $DISABLE_THROTTLE &> sim.log
+                echo "DONE: $workload/$config_name"
+              ) &
+              pids+=($!)
+
+              while [ ${#pids[@]} -ge $MAX_PARALLEL ]; do
+                new_pids=()
+                for pid in "${pids[@]}"; do
+                  if kill -0 $pid 2>/dev/null; then
+                    new_pids+=($pid)
+                  fi
+                done
+                pids=("${new_pids[@]}")
+                if [ ${#pids[@]} -ge $MAX_PARALLEL ]; then
+                  sleep 5
+                fi
+              done
+            done
+          done
+
+          wait
+          echo "=== BOP sensitivity simulations complete ==="
+
+          echo "=== Parse BOP sensitivity summary ==="
+          mkdir -p /results/bop_sensitivity
+          python3 /root/parse_bop_sensitivity.py \
+            /root/exp/simulations \
+            --experiment $EXPERIMENT \
+            --output /root/exp/bop_sensitivity_lab3_summary.csv
+          cp /root/exp/bop_sensitivity_lab3_summary.csv /results/bop_sensitivity/bop_sensitivity_lab3_summary.csv
+          cp /root/exp/bop_sensitivity_lab3_configs.csv /results/bop_sensitivity/bop_sensitivity_lab3_configs.csv
+          cp /root/bop_sensitivity_lab3.json /results/bop_sensitivity/bop_sensitivity_lab3.json
+          cp -a /root/exp/simulations/. /results/exp/simulations/
+
+          echo ""
+          echo "=== BOP SENSITIVITY LAB3 SUMMARY ==="
+          cat /root/exp/bop_sensitivity_lab3_summary.csv
+          echo "=== BOP SENSITIVITY LAB3 JOB DONE ==="
+        volumeMounts:
+        - name: results
+          mountPath: /results
+        resources:
+          requests:
+            cpu: "8"
+            memory: "16Gi"
+          limits:
+            cpu: "8"
+            memory: "16Gi"
+      volumes:
+      - name: results
+        persistentVolumeClaim:
+          claimName: scarab-results
