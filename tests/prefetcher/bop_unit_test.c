@@ -122,6 +122,8 @@ static int test_phase_selects_highest_scoring_offset(void) {
   pref_bop_test_offset(bop, 200);
   pref_bop_test_offset(bop, 102);
   pref_bop_test_offset(bop, 102);
+  pref_bop_test_offset(bop, 200);
+  pref_bop_test_offset(bop, 200);
   CHECK(bop->current_offset == 2, "phase should select offset 2 after it reaches score max");
   CHECK(bop->prefetch_enabled, "prefetch should stay enabled when best_score is above bad_score");
   CHECK(bop->best_score == 0 && bop->offset_index == 0 && bop->rounds == 0, "learning state should reset after phase completion");

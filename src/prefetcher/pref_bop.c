@@ -140,8 +140,9 @@ static void pref_bop_access(Pref_BOP* bop_hwp, uns8 proc_id, Addr lineAddr, Addr
     }
   }
 
-  if (added)
+  if (added) {
     STAT_EVENT(proc_id, BOP_PREF_ISSUED);
+  }
 
   DEBUG(proc_id, "line:%llx pref:%llx off:%d enabled:%d added:%d\n", line_index, pref_index, bop_hwp->current_offset,
         bop_hwp->prefetch_enabled, added);
