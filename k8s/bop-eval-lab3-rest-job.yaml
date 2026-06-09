@@ -1,0 +1,200 @@
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: scarab-bop-eval-lab3-rest
+  namespace: ucsc-hsc
+spec:
+  backoffLimit: 0
+  ttlSecondsAfterFinished: 86400
+  template:
+    spec:
+      restartPolicy: Never
+      affinity:
+        nodeAffinity:
+          requiredDuringSchedulingIgnoredDuringExecution:
+            nodeSelectorTerms:
+            - matchExpressions:
+              - key: kubernetes.io/arch
+                operator: In
+                values:
+                - amd64
+      containers:
+      - name: scarab
+        image: ubuntu:focal
+        command: ["/bin/bash", "-c"]
+        args:
+        - |
+          set -euo pipefail
+
+          echo "=== Install dependencies ==="
+          for attempt in $(seq 1 10); do
+            echo "apt-get update attempt ${attempt}/10"
+            apt-get update \
+              -o Acquire::Retries=5 \
+              -o Acquire::http::Timeout=30 \
+              -o Acquire::https::Timeout=30 \
+              -o Acquire::ForceIPv4=true
+            if apt-cache show python3 libboost-dev bc libsnappy-dev libconfig++-dev >/dev/null 2>&1; then
+              break
+            fi
+            sleep $((attempt * 15))
+          done
+          DEBIAN_FRONTEND=noninteractive apt-get install -y \
+            -o Acquire::Retries=5 \
+            -o Acquire::http::Timeout=30 \
+            -o Acquire::https::Timeout=30 \
+            -o Acquire::ForceIPv4=true \
+            python3 python3-pip git wget cmake binutils \
+            libunwind-dev libboost-dev zlib1g-dev libsnappy-dev liblz4-dev \
+            g++-9 g++-9-multilib libconfig++-dev vim bc unzip
+          update-alternatives --install /usr/bin/g++ g++ /usr/bin/g++-9 1
+          pip3 install gdown
+
+          echo "=== Download traces ==="
+          cd /
+          if [ ! -d "/cse220_traces" ]; then
+            gdown https://drive.google.com/uc?id=1Z4ouWgNrkNnezrq7wxk4OXBpRBm-2CzA
+            tar -xzf cse220_traces.tar.gz
+            rm -f cse220_traces.tar.gz
+          fi
+
+          echo "=== Download PIN ==="
+          export tmpdir="/tmp_home"
+          mkdir -p $tmpdir && cd $tmpdir
+          wget -nc https://software.intel.com/sites/landingpage/pintool/downloads/pin-3.15-98253-gb56e429b1-gcc-linux.tar.gz
+          tar -xzf pin-3.15-98253-gb56e429b1-gcc-linux.tar.gz
+          export PIN_ROOT=$tmpdir/pin-3.15-98253-gb56e429b1-gcc-linux
+          export SCARAB_ENABLE_PT_MEMTRACE=1
+          export LD_LIBRARY_PATH=$PIN_ROOT/extras/xed-intel64/lib:$PIN_ROOT/intel64/runtime/pincrt
+
+          echo "=== Clone BOP branch and build ==="
+          cd /root
+          git clone --branch bop-prefetcher https://github.com/labyrinth-ssr/scarab.git
+          cd /root/scarab
+          git rev-parse --short HEAD
+          pip3 install -r /root/scarab/bin/requirements.txt
+          cd /root/scarab/src && make clean && make
+          export HOME=/root
+          export SCARABHOME=/root/scarab
+
+          echo "=== Create evaluation descriptor ==="
+          cat > /root/bop_eval_lab3_rest.json << 'JSONEOF'
+          {
+              "architecture": "sunny_cove",
+              "workloads_list": [
+                  "500.perlbench_r", "502.gcc_r", "507.cactuBSSN_r",
+                  "520.omnetpp_r", "525.x264_r", "531.deepsjeng_r",
+                  "557.xz_r"
+              ],
+              "experiment": "bop_eval",
+              "configurations": {
+                  "no_pref": "--pref_framework_on 0 --l2l1pref_on 0",
+                  "nextline": "--pref_framework_on 1 --l2l1pref_on 1 --l2next_pref_on 1",
+                  "stream": "--pref_framework_on 1 --pref_ul1_on 1 --pref_stream_on 1",
+                  "stride": "--pref_framework_on 1 --pref_ul1_on 1 --pref_stride_on 1",
+                  "bop": "--pref_framework_on 1 --pref_ul1_on 1 --pref_bop_on 1"
+              }
+          }
+          JSONEOF
+
+          echo "=== Run BOP evaluation for remaining lab3 workloads ==="
+          declare -A trace_num
+          trace_num["500.perlbench_r"]="12569"
+          trace_num["502.gcc_r"]="35835"
+          trace_num["507.cactuBSSN_r"]="430"
+          trace_num["520.omnetpp_r"]="93640"
+          trace_num["525.x264_r"]="165858"
+          trace_num["531.deepsjeng_r"]="76011"
+          trace_num["557.xz_r"]="34585"
+
+          WORKLOADS=(500.perlbench_r 502.gcc_r 507.cactuBSSN_r 520.omnetpp_r 525.x264_r 531.deepsjeng_r 557.xz_r)
+          CONFIGS=(
+            "no_pref:--pref_framework_on 0 --l2l1pref_on 0"
+            "nextline:--pref_framework_on 1 --l2l1pref_on 1 --l2next_pref_on 1 --pref_bop_on 0 --pref_stream_on 0 --pref_stride_on 0 --pref_stridepc_on 0 --pref_ghb_on 0 --pref_2dc_on 0 --pref_markov_on 0 --pref_phase_on 0"
+            "stream:--pref_framework_on 1 --pref_ul1_on 1 --pref_stream_on 1 --l2l1pref_on 0 --pref_bop_on 0 --pref_stride_on 0 --pref_stridepc_on 0 --pref_ghb_on 0 --pref_2dc_on 0 --pref_markov_on 0 --pref_phase_on 0"
+            "stride:--pref_framework_on 1 --pref_ul1_on 1 --pref_stride_on 1 --l2l1pref_on 0 --pref_bop_on 0 --pref_stream_on 0 --pref_stridepc_on 0 --pref_ghb_on 0 --pref_2dc_on 0 --pref_markov_on 0 --pref_phase_on 0"
+            "bop:--pref_framework_on 1 --pref_ul1_on 1 --pref_bop_on 1 --l2l1pref_on 0 --pref_stream_on 0 --pref_stride_on 0 --pref_stridepc_on 0 --pref_ghb_on 0 --pref_2dc_on 0 --pref_markov_on 0 --pref_phase_on 0"
+          )
+
+          SIMHOME=/root/exp/simulations
+          WARMUP=1000000
+          INST_LIMIT=5000000
+          MAX_PARALLEL=4
+          DISABLE_THROTTLE="--pref_throttlefb_on 0 --pref_throttle_on 0"
+          pids=()
+
+          for workload in "${WORKLOADS[@]}"; do
+            tnum=${trace_num[$workload]}
+            TRACEFILE=/cse220_traces/$workload/traces_simp/$tnum/trace/$tnum.zip
+
+            for config_entry in "${CONFIGS[@]}"; do
+              config_name="${config_entry%%:*}"
+              config_params="${config_entry#*:}"
+              exp_dir=$SIMHOME/$workload/bop_eval/$config_name
+
+              mkdir -p $exp_dir
+              cp $SCARABHOME/src/PARAMS.sunny_cove $exp_dir/PARAMS.in
+
+              (
+                cd $exp_dir
+                echo "RUN: $workload/$config_name"
+                $SCARABHOME/src/scarab \
+                  --frontend memtrace \
+                  --cbp_trace_r0 $TRACEFILE \
+                  --memtrace_roi_begin 1 \
+                  --memtrace_roi_end $INST_LIMIT \
+                  --inst_limit $INST_LIMIT \
+                  --full_warmup $WARMUP \
+                  --use_fetched_count=0 \
+                  $config_params \
+                  $DISABLE_THROTTLE &> sim.log
+                echo "DONE: $workload/$config_name"
+              ) &
+              pids+=($!)
+
+              while [ ${#pids[@]} -ge $MAX_PARALLEL ]; do
+                new_pids=()
+                for pid in "${pids[@]}"; do
+                  if kill -0 $pid 2>/dev/null; then
+                    new_pids+=($pid)
+                  fi
+                done
+                pids=("${new_pids[@]}")
+                if [ ${#pids[@]} -ge $MAX_PARALLEL ]; then
+                  sleep 5
+                fi
+              done
+            done
+          done
+
+          wait
+          echo "=== Remaining lab3 BOP evaluation simulations complete ==="
+
+          echo "=== Parse BOP evaluation summary ==="
+          mkdir -p /results/bop_eval
+          python3 /root/scarab/scripts/parse_bop_eval.py \
+            /root/exp/simulations \
+            --experiment bop_eval \
+            --output /root/exp/bop_eval_lab3_rest_summary.csv
+          cp /root/exp/bop_eval_lab3_rest_summary.csv /results/bop_eval/bop_eval_lab3_rest_summary.csv
+          cp /root/bop_eval_lab3_rest.json /results/bop_eval/bop_eval_lab3_rest.json
+          cp -a /root/exp/simulations/. /results/exp/simulations/
+
+          echo ""
+          echo "=== BOP EVAL LAB3 REST SUMMARY ==="
+          cat /root/exp/bop_eval_lab3_rest_summary.csv
+          echo "=== BOP EVAL LAB3 REST JOB DONE ==="
+        volumeMounts:
+        - name: results
+          mountPath: /results
+        resources:
+          requests:
+            cpu: "8"
+            memory: "16Gi"
+          limits:
+            cpu: "8"
+            memory: "16Gi"
+      volumes:
+      - name: results
+        persistentVolumeClaim:
+          claimName: scarab-results
